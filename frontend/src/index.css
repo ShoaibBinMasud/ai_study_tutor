@@ -1,0 +1,196 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&family=Lora:ital,wght@0,400..700;1,400..700&family=JetBrains+Mono:wght@400;500&family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Outfit:wght@400;500;600&family=Manrope:wght@400;500&display=swap');
+@import "tailwindcss";
+@source "./App.tsx";
+@source "./components/**/*.tsx";
+@source "./**/*.tsx";
+
+/* ── Design Tokens (Dynamic) ───────────────────────── */
+@layer base {
+  :root {
+    --font-sans:     "Montserrat", system-ui, sans-serif;
+    --font-serif:    "EB Garamond", Georgia, serif;
+    --font-display:  "EB Garamond", serif;
+    --font-mono:     "JetBrains Mono", monospace;
+    --font-folder:   "Montserrat", sans-serif;
+    --font-session:  "Montserrat", sans-serif;
+
+    /* Light Theme (Premium) */
+    --color-bg:          #FFFFFF;
+    --color-surface:     #F9FAFB;
+    --color-surface-2:   #F3f4f6;
+    --color-border:      #E5E7EB;
+    --color-border-md:   #D1D5DB;
+
+    --color-text-1: #111827;
+    --color-text-2: #4B5563;
+    --color-text-3: #9CA3AF;
+
+    --color-accent:       #c6a85b;
+    --color-accent-dim:   rgba(198,168,91,0.12);
+    --color-accent-hover: #b5964a;
+  }
+
+  .dark {
+    /* Dark Theme */
+    --color-bg:          #0f1115;
+    --color-surface:     #171a21;
+    --color-surface-2:   #1e2230;
+    --color-border:      rgba(255,255,255,0.06);
+    --color-border-md:   rgba(255,255,255,0.10);
+
+    --color-text-1: #ffffff;
+    --color-text-2: #a0a6b1;
+    --color-text-3: #5a6070;
+
+    --color-accent:       #c6a85b;
+    --color-accent-dim:   rgba(198,168,91,0.12);
+    --color-accent-hover: #d4b96f;
+  }
+}
+
+/* ── Base ──────────────────────────────────────────── */
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html {
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    background: var(--color-bg);
+    color: var(--color-text-1);
+    height: 100dvh;
+    overflow: hidden;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  #root {
+    width: 100%;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  ::-webkit-scrollbar       { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--color-border-md); border-radius: 99px; }
+}
+
+/* ── Typography ─────────────────────────────────────── */
+.font-display { font-family: var(--font-display); }
+.font-sans    { font-family: var(--font-sans); }
+.font-serif   { font-family: var(--font-serif); }
+.font-mono    { font-family: var(--font-mono); }
+
+/* ── Tutor Message prose ────────────────────────────── */
+.tutor-prose {
+  font-family: var(--font-serif);
+  font-size: 0.95rem;
+  line-height: 1.8;
+  color: var(--color-text-1);
+}
+.tutor-prose strong { font-weight: 700; color: inherit; }
+.tutor-prose em     { color: var(--color-accent); font-style: italic; }
+.tutor-prose h1, .tutor-prose h2, .tutor-prose h3 {
+  font-family: var(--font-display);
+  color: var(--color-text-1);
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+  line-height: 1.3;
+}
+.tutor-prose h1 { font-size: 1.5rem; }
+.tutor-prose h2 { font-size: 1.25rem; }
+.tutor-prose h3 { font-size: 1.1rem; font-weight: 600; }
+.tutor-prose p  { margin: 0.85rem 0; }
+.tutor-prose ul, .tutor-prose ol { padding-left: 1.5rem; margin: 0.85rem 0; }
+.tutor-prose li { margin-bottom: 0.5rem; color: var(--color-text-2); }
+.tutor-prose blockquote {
+  border-left: 2px solid var(--color-accent);
+  padding-left: 1rem;
+  color: var(--color-text-2);
+  margin: 1rem 0;
+  font-style: italic;
+}
+.tutor-prose code {
+  font-family: var(--font-mono);
+  font-size: 0.87em;
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+}
+.tutor-prose pre {
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 1rem 1.2rem;
+  margin: 1rem 0;
+  overflow-x: auto;
+}
+.tutor-prose .katex-display {
+  margin: 1.5rem 0 !important;
+  padding: 1.25rem;
+  background: var(--color-surface);
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+}
+
+/* ── Theme Toggle Button ───────────────────────────── */
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-2);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.theme-toggle:hover {
+  background: var(--color-surface-2);
+  color: var(--color-text-1);
+  transform: scale(1.05);
+}
+
+/* ── Action buttons (Academic Inline Controls) ──────── */
+.action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0;
+  border-radius: 0;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+  background: transparent;
+  color: var(--color-text-3);
+  font-family: var(--font-sans);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid transparent;
+}
+.action-btn:hover {
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent-dim);
+}
+.action-btn svg {
+  color: inherit;
+  opacity: 0.7;
+}
+
+/* ── Shared Animations ── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.anim-fade-up { animation: fadeUp 0.4s cubic-bezier(0.16,1,0.3,1) forwards; }

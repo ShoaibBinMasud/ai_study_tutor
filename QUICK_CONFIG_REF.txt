@@ -1,0 +1,58 @@
+═════════════════════════════════════════════════════════════════════════════
+  MODEL CONFIGURATION — QUICK REFERENCE
+═════════════════════════════════════════════════════════════════════════════
+
+✓ WHAT'S NEW:
+  • src/config.py — Central model configuration for all agents
+  • CONFIG_GUIDE.md — Full documentation with examples
+  • Test files updated to use config system
+
+✓ TO CHANGE TEACHING MODEL:
+
+  1. Open: src/config.py
+  2. Find line 19: "teaching_agent": {"model": "gpt-4o", ...}
+  3. Change "gpt-4o" to any of:
+     - gpt-4o         (best quality for teaching)
+     - gpt-4o-mini    (smaller, cheaper)
+     - claude-opus-4-6 (needs Anthropic API)
+     - gemini-2.0-pro (Google, good quality)
+  4. Save and re-run tests
+
+✓ HOW IT WORKS:
+
+  Before (hardcoded):
+    llm = LLMClient()  # Always uses default gpt-4o-mini
+  
+  After (config-driven):
+    from config import get_model
+    llm = LLMClient(model=get_model("teaching_agent"))
+    # Reads from config.py, easy to change
+
+✓ FILES MODIFIED:
+
+  Created:
+    • src/config.py           (7 agents, 50 lines of config)
+    • CONFIG_GUIDE.md         (Comprehensive guide + examples)
+  
+  Updated:
+    • test_plan_driven_tutor.py       (now uses config)
+    • test_plan_driven_tutor_app.py   (now uses config)
+
+✓ USAGE:
+
+  # In any Python file:
+  from config import get_model
+  from utils.llm_client import LLMClient
+  
+  model = get_model("teaching_agent")  # "gpt-4o"
+  llm = LLMClient(model=model)
+  response = llm.get_completion(...)
+
+✓ TO TEST:
+
+  CLI:    python test_plan_driven_tutor.py
+  Web:    python test_plan_driven_tutor_app.py
+  
+  Both now use the model specified in config.py for teaching_agent
+
+═════════════════════════════════════════════════════════════════════════════

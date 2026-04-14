@@ -1,0 +1,5 @@
+# Temporary: focus on document processing only
+*
+!src/
+!src/content/
+!src/agents/document_scanner_agent.py

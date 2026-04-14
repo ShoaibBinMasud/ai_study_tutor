@@ -1,0 +1,35 @@
+# Unified Extraction Tools Configuration
+# ======================================
+# Configuration for all extraction tools:
+# - pdf_extraction.py
+# - scanned_pdf_extraction.py
+# - image_extraction.py
+
+# Global Settings (shared across all tools)
+global:
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  output_directory: "."
+
+# PDF Extraction Tool Configuration
+pdf_extraction:
+  # Extraction modes: text_only | text_formulas | text_images | complete
+  extraction_mode: "complete"
+  vision_model: "gpt-4o"
+  output_prefix: "extraction"
+
+# Scanned PDF Extraction Tool Configuration
+scanned_pdf_extraction:
+  vision_model: "gpt-4o"
+  batch_size: 2
+  dpi: 150
+  output_prefix: "scanned_extraction"
+  max_tokens: 4000
+  temperature: 0.1
+
+# Image Extraction Tool Configuration
+image_extraction:
+  vision_model: "gpt-4o"
+  output_format: "markdown"  # markdown or json
+  output_prefix: "image_extraction"
+  max_tokens: 2000
+  temperature: 0.1

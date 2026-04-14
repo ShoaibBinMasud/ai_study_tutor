@@ -1,0 +1,38 @@
+# UI
+gradio>=4.0.0
+
+# REST API (React frontend)
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9    # required for FastAPI file uploads
+
+# Core dependencies
+requests>=2.31.0
+PyMuPDF>=1.23.0
+python-dotenv>=1.0.0
+
+# LangChain dependencies
+langchain-core>=0.1.0
+
+# OpenAI
+openai>=1.0.0
+
+# Google Gemini
+google-genai>=1.0.0
+
+# File type processing (Phase 1 additions)
+python-pptx>=0.6.21      # PowerPoint (.pptx) extraction
+python-docx>=1.1.0       # Word document (.docx) extraction
+Pillow>=10.0.0            # Image handling (for vision LLM preprocessing)
+
+# Standard library (included with Python)
+# - json
+# - logging
+# - sys
+# - os
+# - re
+# - typing
+# - pathlib
+# - base64
+# - dataclasses
+# - enum

@@ -1,0 +1,623 @@
+"""
+Build ToC from already-extracted chunks (JSON file)
+
+This is FAST because it doesn't re-extract the PDF!
+Just reads the chunks JSON and builds ToC from it.
+"""
+
+import sys
+import json
+import re
+from pathlib import Path
+from toc_tracker import ToCTracker
+
+
+def _clean_title(title):
+    """Clean up a title - fix missing spaces, None values, etc."""
+    if not title or str(title).lower() == "none":
+        return ""
+    title = str(title)
+    
+    # Fix artificially spaced-out text (e.g., "P ro g ra m  G o a ls" -> "Program Goals")
+    # Detect: many single/double-char tokens separated by spaces
+    words = title.split()
+    if len(words) > 4:
+        short_count = sum(1 for w in words if len(w) <= 2 and w.isalpha())
+        if short_count / len(words) > 0.5:
+            # Merge adjacent short alpha tokens into words
+            merged = []
+            current_merge = ""
+            for w in words:
+                if len(w) <= 2 and w.isalpha():
+                    # Uppercase starts a new word if we already have content
+                    if w[0].isupper() and current_merge:
+                        merged.append(current_merge)
+                        current_merge = w
+                    else:
+                        current_merge += w
+                else:
+                    if current_merge:
+                        merged.append(current_merge)
+                        current_merge = ""
+                    merged.append(w)
+            if current_merge:
+                merged.append(current_merge)
+            title = " ".join(merged)
+    
+    # Fix missing spaces between camelCase words (e.g., "AtomicSpectra" -> "Atomic Spectra")
+    title = re.sub(r'([a-z])([A-Z])', r'\1 \2', title)
+    
+    # Fix common stuck-together words from font extraction
+    # e.g., "TheSchrödinger" -> "The Schrödinger", "ofSolids" -> "of Solids"
+    title = re.sub(r'\b(The|Of|And|In|For|An|At|By|To|On|Is|It|As|Or|Be|So|If|No|Do|Up|of|and|in|for|an|at|by|to|on|is|it|as|or)([A-Z])', r'\1 \2', title)
+    
+    # Fix extra whitespace
+    title = re.sub(r'\s+', ' ', title).strip()
+    
+    # Remove trailing section numbers that bled into chapter title
+    # e.g., "Probability Models 1.1 Probability: A Measure of Uncertainty" -> "Probability Models"
+    # Pattern: title text followed by " N.N section title..."
+    section_bleed = re.search(r'\s+\d+\.\d+\s+', title)
+    if section_bleed:
+        # Only trim if there's meaningful text before the section number
+        before = title[:section_bleed.start()].strip()
+        if len(before) >= 5:
+            title = before
+    
+    return title
+
+
+def _post_process_toc(toc):
+    """
+    Post-process ToC to fix common issues:
+    1. Separate appendixes from regular chapters
+    2. Remove front matter misdetections
+    3. Cap end pages at appendix boundary
+    4. Clean up titles
+    5. Sort chapters by number
+    """
+    chapters = toc['chapters']
+    sections = toc['sections']
+    
+    # --- Step 1: Separate appendixes from numeric chapters ---
+    numeric_chapters = []
+    appendix_chapters = []
+    
+    for ch in chapters:
+        try:
+            int(ch['number'])
+            numeric_chapters.append(ch)
+        except (ValueError, TypeError):
+            appendix_chapters.append(ch)
+    
+    # --- Step 2: Sort numeric chapters by number ---
+    numeric_chapters.sort(key=lambda x: int(x['number']))
+    
+    # --- Step 3: Remove front matter misdetections ---
+    # Find Chapter 1 (or lowest numeric chapter)
+    chapter_1 = None
+    for ch in numeric_chapters:
+        if int(ch['number']) == 1:
+            chapter_1 = ch
+            break
+    
+    # Validate Chapter 1: reject if it looks like a false detection
+    # (e.g., "SUMMARY Key Expectations" with only a few pages)
+    if chapter_1:
+        _suspicious_words = ['summary', 'review', 'expectations', 'objectives', 'overview', 'contents', 'preface']
+        ch1_title_lower = chapter_1.get('title', '').lower()
+        ch1_pages = (chapter_1.get('end_page') or chapter_1['start_page']) - chapter_1['start_page']
+        is_false_ch1 = (
+            ch1_pages < 10 and 
+            any(w in ch1_title_lower for w in _suspicious_words)
+        )
+        if is_false_ch1:
+            numeric_chapters.remove(chapter_1)
+            chapter_1 = None
+            # Try to find real Chapter 1 from section data (sections 1.x)
+            ch1_sections = [s for s in sections if str(s.get('chapter_number')) == '1' 
+                           or (s.get('number', '').startswith('1.') and not s.get('number', '').startswith('1' + '0'))]
+            if ch1_sections:
+                ch1_start = min(s['start_page'] for s in ch1_sections)
+                ch1_end = max(s.get('end_page') or s['start_page'] for s in ch1_sections)
+                inferred_ch1 = {
+                    "number": "1",
+                    "title": "",  # Will be cleaned up later
+                    "start_page": ch1_start,
+                    "end_page": ch1_end
+                }
+                numeric_chapters.insert(0, inferred_ch1)
+                chapter_1 = inferred_ch1
+                numeric_chapters.sort(key=lambda x: int(x['number']))
+    
+    # Infer missing chapters from section data
+    # e.g., sections 5.1-5.4 exist but Chapter 5 is not in the list
+    existing_ch_nums = {int(ch['number']) for ch in numeric_chapters}
+    section_ch_nums = set()
+    for s in sections:
+        ch_num = s.get('chapter_number')
+        if ch_num:
+            try:
+                section_ch_nums.add(int(ch_num))
+            except (ValueError, TypeError):
+                pass
+    
+    for missing_num in sorted(section_ch_nums - existing_ch_nums):
+        ch_sections = [s for s in sections if str(s.get('chapter_number')) == str(missing_num)]
+        if ch_sections:
+            ch_start = min(s['start_page'] for s in ch_sections)
+            ch_end = max(s.get('end_page') or s['start_page'] for s in ch_sections)
+            inferred = {
+                "number": str(missing_num),
+                "title": "",  # Will be verified from chunks later
+                "start_page": ch_start,
+                "end_page": ch_end
+            }
+            numeric_chapters.append(inferred)
+    numeric_chapters.sort(key=lambda x: int(x['number']))
+    
+    if chapter_1:
+        ch1_page = chapter_1['start_page']
+        # Remove chapters whose start_page is BEFORE Chapter 1
+        # AND whose number is > 1 (they were detected in ToC/front matter pages)
+        cleaned = []
+        for ch in numeric_chapters:
+            ch_num = int(ch['number'])
+            if ch_num > 1 and ch['start_page'] < ch1_page:
+                # This chapter was detected in front matter - skip it
+                # But only if there's ANOTHER entry for this chapter number later
+                has_later_entry = any(
+                    int(other['number']) == ch_num and other['start_page'] >= ch1_page
+                    for other in numeric_chapters if other is not ch
+                )
+                if has_later_entry:
+                    continue  # Skip front matter duplicate
+                # If no later entry exists, check if its sections start after ch1
+                ch_sections = [s for s in sections if s.get('chapter_number') == ch['number']]
+                if ch_sections and min(s['start_page'] for s in ch_sections) >= ch1_page:
+                    # Sections are after Chapter 1, so the chapter detection was wrong
+                    # but its content is real - fix start_page to first section
+                    ch['start_page'] = min(s['start_page'] for s in ch_sections)
+                    cleaned.append(ch)
+                elif ch['start_page'] < ch1_page - 10:
+                    continue  # Clearly front matter, skip
+                else:
+                    cleaned.append(ch)  # Keep if close to Chapter 1
+            else:
+                cleaned.append(ch)
+        numeric_chapters = cleaned
+    
+    # Deduplicate: if same chapter number appears multiple times, keep the one
+    # that best fits the page sequence
+    seen_numbers = {}
+    deduped = []
+    for ch in numeric_chapters:
+        ch_num = int(ch['number'])
+        if ch_num in seen_numbers:
+            existing = seen_numbers[ch_num]
+            # Keep the one with the later start page (more likely real content)
+            if ch['start_page'] > existing['start_page']:
+                deduped.remove(existing)
+                seen_numbers[ch_num] = ch
+                deduped.append(ch)
+        else:
+            seen_numbers[ch_num] = ch
+            deduped.append(ch)
+    numeric_chapters = deduped
+    
+    # Re-sort by number after dedup
+    numeric_chapters.sort(key=lambda x: int(x['number']))
+    
+    # --- Step 4: Fix chapter end pages based on next chapter start ---
+    for i, ch in enumerate(numeric_chapters):
+        if i + 1 < len(numeric_chapters):
+            next_start = numeric_chapters[i + 1]['start_page']
+            if ch['end_page'] is None or ch['end_page'] >= next_start:
+                ch['end_page'] = next_start - 1
+    
+    # --- Step 5: Cap end pages at appendix boundary ---
+    appendix_start = min((a['start_page'] for a in appendix_chapters), default=None)
+    content_end_page = toc['total_pages']
+    
+    if appendix_start:
+        content_end_page = appendix_start - 1
+        # Cap last numeric chapter
+        if numeric_chapters:
+            last_ch = numeric_chapters[-1]
+            if last_ch['end_page'] is None or last_ch['end_page'] > content_end_page:
+                last_ch['end_page'] = content_end_page
+        
+        # Cap sections that bleed into appendix
+        for s in sections:
+            if s['end_page'] and s['end_page'] > content_end_page:
+                s['end_page'] = content_end_page
+    
+    # --- Step 6: Clean titles ---
+    for ch in numeric_chapters:
+        ch['title'] = _clean_title(ch['title'])
+    for ch in appendix_chapters:
+        ch['title'] = _clean_title(ch['title'])
+    for s in sections:
+        s['title'] = _clean_title(s['title'])
+        # Replace None/empty titles
+        if not s['title']:
+            s['title'] = "(Untitled)"
+    
+    # --- Step 7: Reassign sections to correct chapters based on section number ---
+    # e.g., section "1.2" should belong to chapter "1", not chapter "5"
+    for s in sections:
+        sec_num = str(s.get('number', ''))
+        # Extract chapter number from section number (e.g., "1.2" -> "1", "10.3" -> "10")
+        sec_ch_match = re.match(r'^(\d+)[.\-]', sec_num)
+        if sec_ch_match:
+            natural_ch = sec_ch_match.group(1)
+            if s.get('chapter_number') != natural_ch:
+                s['chapter_number'] = natural_ch
+    
+    # --- Step 7a2: Infer missing chapters after section reassignment ---
+    # After reassigning sections by their number prefix, some chapters may now be needed
+    # e.g., sections 26.x were under chapter 25, now reassigned to chapter 26 which doesn't exist
+    existing_ch_nums = {int(ch['number']) for ch in numeric_chapters}
+    section_ch_nums = set()
+    for s in sections:
+        ch_num = s.get('chapter_number')
+        if ch_num:
+            try:
+                section_ch_nums.add(int(ch_num))
+            except (ValueError, TypeError):
+                pass
+    
+    for missing_num in sorted(section_ch_nums - existing_ch_nums):
+        ch_sections = [s for s in sections if str(s.get('chapter_number')) == str(missing_num)]
+        if ch_sections:
+            ch_start = min(s['start_page'] for s in ch_sections)
+            ch_end = max(s.get('end_page') or s['start_page'] for s in ch_sections)
+            inferred = {
+                "number": str(missing_num),
+                "title": "",  # Will be verified from chunks later
+                "start_page": ch_start,
+                "end_page": ch_end
+            }
+            numeric_chapters.append(inferred)
+    numeric_chapters.sort(key=lambda x: int(x['number']))
+    
+    # --- Step 7b: Recalculate chapter boundaries from their sections ---
+    for ch in numeric_chapters:
+        ch_sections = [s for s in sections if str(s.get('chapter_number')) == str(ch['number'])]
+        if ch_sections:
+            sec_start = min(s['start_page'] for s in ch_sections)
+            sec_end = max(s.get('end_page') or s['start_page'] for s in ch_sections)
+            # If section start is far from chapter start, chapter start was probably wrong
+            # (e.g., front matter detection placed it at page 10, but sections start at 218)
+            if sec_start > ch['start_page'] + 10:
+                ch['start_page'] = sec_start
+            elif ch['start_page'] > sec_start:
+                ch['start_page'] = sec_start
+            if ch['end_page'] is None or ch['end_page'] < ch['start_page']:
+                ch['end_page'] = sec_end
+    
+    # Re-sort and fix end pages after boundary recalculation
+    numeric_chapters.sort(key=lambda x: (int(x['number']), x['start_page']))
+    for i, ch in enumerate(numeric_chapters):
+        if i + 1 < len(numeric_chapters):
+            next_start = numeric_chapters[i + 1]['start_page']
+            if ch['end_page'] is None or ch['end_page'] >= next_start:
+                ch['end_page'] = next_start - 1
+        # Safety: ensure end_page > start_page
+        if ch['end_page'] is not None and ch['end_page'] < ch['start_page']:
+            ch['end_page'] = None  # Will be recalculated
+    
+    # --- Step 7c: Filter orphaned sections ---
+    # Remove sections whose start_page is before the first real chapter
+    if numeric_chapters:
+        first_real_page = numeric_chapters[0]['start_page']
+        sections = [s for s in sections if s['start_page'] >= first_real_page - 5]
+    
+    # --- Step 8: Rebuild ToC ---
+    toc['chapters'] = numeric_chapters
+    toc['appendixes'] = appendix_chapters
+    toc['sections'] = sections
+    toc['total_chapters'] = len(numeric_chapters)
+    toc['total_appendixes'] = len(appendix_chapters)
+    toc['total_sections'] = len(sections)
+    toc['content_end_page'] = content_end_page
+    
+    return toc
+
+
+def _verify_titles_from_chunks(toc, chunks_data):
+    """
+    Verify and fix chapter titles by looking at chunk metadata at each chapter's start page.
+    This catches cases where front matter detection polluted the title.
+    """
+    # Build page -> chunk metadata lookup
+    page_metadata = {}
+    for chunk in chunks_data:
+        meta = chunk['metadata']
+        page = meta.get('page')
+        if page and meta.get('chapter_title'):
+            if page not in page_metadata:
+                page_metadata[page] = meta
+    
+    for ch in toc.get('chapters', []):
+        start = ch['start_page']
+        found = False
+        # Look at the chunk at or near the chapter start page
+        for offset in range(5):  # Check up to 5 pages near start
+            meta = page_metadata.get(start + offset)
+            if meta and str(meta.get('chapter_number')) == str(ch['number']):
+                chunk_title = meta.get('chapter_title', '')
+                if chunk_title:
+                    ch_title_clean = _clean_title(chunk_title)
+                    # Use chunk title if current is empty OR chunk title is longer/better
+                    if not ch['title'] or (ch_title_clean and len(ch_title_clean) > len(ch['title'])):
+                        ch['title'] = ch_title_clean
+                found = True
+                break
+        
+        # Fallback for inferred chapters: look for any chunk near start with a chapter_title
+        # This handles cases where section reassignment changed chapter numbers
+        # But avoid reusing titles already assigned to other chapters
+        if not found and not ch['title']:
+            existing_titles = {c['title'] for c in toc.get('chapters', []) if c['title'] and c is not ch}
+            for offset in range(5):
+                meta = page_metadata.get(start + offset)
+                if meta and meta.get('chapter_title'):
+                    ch_title_clean = _clean_title(meta['chapter_title'])
+                    if ch_title_clean and ch_title_clean not in existing_titles:
+                        ch['title'] = ch_title_clean
+                        break
+    
+    return toc
+
+
+def _fill_titles_from_pdf_toc(toc, pdf_path):
+    """
+    Fill in empty chapter titles using the PDF's built-in ToC (if available).
+    This is a fallback for chapters that were inferred from section data
+    and couldn't get titles from chunk metadata.
+    """
+    try:
+        import fitz
+        doc = fitz.open(pdf_path)
+        builtin_toc = doc.get_toc()
+        doc.close()
+    except Exception:
+        return toc
+    
+    if not builtin_toc:
+        return toc
+    
+    # Build a lookup: page number -> chapter title from built-in ToC
+    builtin_chapters = {}
+    for level, title, page in builtin_toc:
+        if level == 1 and re.match(r'^Chapter\s+\d+', title):
+            # Extract chapter number and title
+            m = re.match(r'^Chapter\s+(\d+)\s+(.*)', title)
+            if m:
+                ch_num = m.group(1)
+                ch_title = m.group(2).strip()
+                builtin_chapters[ch_num] = ch_title
+    
+    if not builtin_chapters:
+        return toc
+    
+    filled = 0
+    for ch in toc.get('chapters', []):
+        if not ch['title'] and str(ch['number']) in builtin_chapters:
+            ch['title'] = builtin_chapters[str(ch['number'])]
+            filled += 1
+    
+    if filled:
+        print(f"  Filled {filled} chapter titles from PDF built-in ToC")
+    
+    return toc
+
+
+def build_toc_from_json(json_path: str):
+    """
+    Build ToC from chunks JSON file
+    
+    Args:
+        json_path: Path to chunks JSON file (e.g., modern_physics_page_by_page_chunks.json)
+    """
+    json_file = Path(json_path)
+    
+    if not json_file.exists():
+        print(f"\nError: File not found: {json_path}")
+        print("\nFirst run: python enhanced_rag_extractor.py your_pdf.pdf")
+        print("This will create: your_pdf_page_by_page_chunks.json")
+        print("Then run: python build_toc_from_json.py your_pdf_page_by_page_chunks.json")
+        return None, None
+    
+    print("\n" + "="*80)
+    print(f"Building ToC from: {json_file.name}")
+    print("="*80 + "\n")
+    
+    # Load chunks from JSON
+    print("Step 1: Loading chunks from JSON...")
+    with open(json_file, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    
+    # Handle both formats: direct array or wrapped in "chunks" key
+    if isinstance(data, dict) and 'chunks' in data:
+        chunks_data = data['chunks']
+        print(f"File metadata: {data.get('metadata', {})}")
+    else:
+        chunks_data = data
+    
+    print(f"Loaded {len(chunks_data)} chunks")
+    
+    # Build ToC directly from chunks data
+    print("Step 2: Building ToC from metadata...")
+    tracker = ToCTracker()
+    
+    for chunk_data in chunks_data:
+        metadata = chunk_data['metadata']
+        page_num = metadata.get("page")
+        
+        # Track chapter
+        if metadata.get("chapter_number"):
+            chapter_info = {
+                "number": metadata["chapter_number"],
+                "title": metadata.get("chapter_title", "")
+            }
+            tracker.track_chapter(chapter_info, page_num)
+        
+        # Track section
+        if metadata.get("section_number"):
+            section_info = {
+                "number": metadata["section_number"],
+                "title": metadata.get("section_title", "")
+            }
+            tracker.track_section(section_info, page_num)
+    
+    # Finalize
+    total_pages = max(chunk_data['metadata'].get("page", 0) for chunk_data in chunks_data) if chunks_data else 0
+    tracker.finalize(total_pages)
+    toc = tracker.get_toc()
+    
+    # Post-process ToC
+    print("Step 3: Post-processing ToC...")
+    toc = _post_process_toc(toc)
+    
+    # Verify titles against chunk metadata
+    print("Step 4: Verifying titles...")
+    toc = _verify_titles_from_chunks(toc, chunks_data)
+    
+    # Try to fill remaining empty titles from PDF built-in ToC
+    # Infer PDF path from JSON filename (e.g., "Book_page_level_chunks.json" -> "Book.pdf")
+    pdf_name = json_file.stem.replace('_page_level_chunks', '').replace('_page_by_page_chunks', '')
+    pdf_path = json_file.parent / f"{pdf_name}.pdf"
+    if pdf_path.exists():
+        empty_titles = sum(1 for ch in toc.get('chapters', []) if not ch.get('title'))
+        if empty_titles > 0:
+            print(f"  {empty_titles} chapters still without titles, checking PDF built-in ToC...")
+            toc = _fill_titles_from_pdf_toc(toc, str(pdf_path))
+    
+    # Show results
+    print("\n" + "="*80)
+    print("RESULTS")
+    print("="*80)
+    print(f"Total pages: {toc['total_pages']}")
+    print(f"Content pages: {toc.get('content_end_page', toc['total_pages'])}")
+    print(f"Total chunks: {len(chunks_data)}")
+    print(f"Chapters detected: {toc['total_chapters']}")
+    print(f"Sections detected: {toc['total_sections']}")
+    if toc.get('total_appendixes', 0) > 0:
+        print(f"Appendixes detected: {toc['total_appendixes']}")
+    
+    # Show chapters
+    print("\n" + "-"*80)
+    print("CHAPTERS")
+    print("-"*80)
+    for i, chapter in enumerate(toc['chapters'], 1):
+        end = chapter['end_page'] if chapter['end_page'] else '?'
+        print(f"{i}. Chapter {chapter['number']}: {chapter['title']}")
+        print(f"   Pages: {chapter['start_page']}-{end}")
+    
+    # Show first 15 sections
+    print("\n" + "-"*80)
+    print("SECTIONS (first 15)")
+    print("-"*80)
+    for i, section in enumerate(toc['sections'][:15], 1):
+        end = section['end_page'] if section['end_page'] else '?'
+        ch = f" [Chapter {section['chapter_number']}]" if section.get('chapter_number') else ""
+        print(f"{i}. Section {section['number']}: {section['title']}{ch}")
+        print(f"   Pages: {section['start_page']}-{end}")
+    
+    if len(toc['sections']) > 15:
+        print(f"\n... and {len(toc['sections']) - 15} more sections")
+    
+    # Show appendixes
+    if toc.get('appendixes'):
+        print("\n" + "-"*80)
+        print("APPENDIXES")
+        print("-"*80)
+        for i, appendix in enumerate(toc['appendixes'], 1):
+            end = appendix['end_page'] if appendix['end_page'] else '?'
+            print(f"{i}. {appendix['number']}: {appendix['title']}")
+            print(f"   Pages: {appendix['start_page']}-{end}")
+    
+    # Export ToC to JSON
+    # Handle both _page_by_page_chunks and _page_level_chunks naming
+    stem = json_file.stem
+    for suffix in ['_page_by_page_chunks', '_page_level_chunks']:
+        stem = stem.replace(suffix, '')
+    toc_output = json_file.parent / (stem + '_toc.json')
+    print(f"\n\nExporting ToC to: {toc_output}")
+    with open(toc_output, 'w', encoding='utf-8') as f:
+        json.dump(toc, f, indent=2, ensure_ascii=False)
+    
+    # Export human-readable ToC
+    toc_txt = json_file.parent / (stem + '_toc.txt')
+    print(f"Exporting readable ToC to: {toc_txt}")
+    
+    with open(toc_txt, 'w', encoding='utf-8') as f:
+        f.write("=" * 80 + "\n")
+        f.write("TABLE OF CONTENTS\n")
+        f.write("=" * 80 + "\n\n")
+        f.write(f"Document: {stem}\n")
+        f.write(f"Total Pages: {toc['total_pages']}\n")
+        f.write(f"Content Pages: {toc.get('content_end_page', toc['total_pages'])}\n")
+        f.write(f"Total Chapters: {toc['total_chapters']}\n")
+        f.write(f"Total Sections: {toc['total_sections']}\n")
+        if toc.get('total_appendixes', 0) > 0:
+            f.write(f"Total Appendixes: {toc['total_appendixes']}\n")
+        f.write("\n" + "=" * 80 + "\n\n")
+        
+        # Group sections by chapter
+        from collections import defaultdict
+        sections_by_chapter = defaultdict(list)
+        for section in toc['sections']:
+            chapter_num = section.get('chapter_number', 'None')
+            sections_by_chapter[chapter_num].append(section)
+        
+        # Write chapters with sections
+        for chapter in toc['chapters']:
+            ch_num = chapter['number']
+            end = chapter['end_page'] if chapter['end_page'] else '?'
+            f.write(f"Chapter {ch_num}: {chapter['title']}\n")
+            f.write(f"  Pages: {chapter['start_page']}-{end}\n\n")
+            
+            # Write sections for this chapter
+            if ch_num in sections_by_chapter:
+                for section in sections_by_chapter[ch_num]:
+                    s_end = section['end_page'] if section['end_page'] else '?'
+                    f.write(f"  {section['number']}: {section['title']}\n")
+                    f.write(f"    Pages: {section['start_page']}-{s_end}\n")
+                f.write("\n")
+        
+        # Write appendixes
+        if toc.get('appendixes'):
+            f.write("\n" + "=" * 80 + "\n")
+            f.write("APPENDIXES\n")
+            f.write("=" * 80 + "\n\n")
+            for appendix in toc['appendixes']:
+                end = appendix['end_page'] if appendix['end_page'] else '?'
+                f.write(f"{appendix['number']}: {appendix['title']}\n")
+                f.write(f"  Pages: {appendix['start_page']}-{end}\n\n")
+    
+    print("\n" + "="*80)
+    print("COMPLETE")
+    print("="*80)
+    print("\nFiles created:")
+    print(f"  - {toc_output} (JSON format)")
+    print(f"  - {toc_txt} (Human-readable)")
+    print()
+    
+    return chunks_data, toc
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("\nUsage: python build_toc_from_json.py <chunks_json_file>")
+        print("\nExample:")
+        print("  python build_toc_from_json.py modern_physics_page_by_page_chunks.json")
+        print("\nIf you don't have a chunks JSON file yet:")
+        print("  1. Run: python enhanced_rag_extractor.py modern_physics.pdf")
+        print("  2. Then: python build_toc_from_json.py modern_physics_page_by_page_chunks.json")
+        sys.exit(1)
+    
+    json_path = sys.argv[1]
+    chunks, toc = build_toc_from_json(json_path)

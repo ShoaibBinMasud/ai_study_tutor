@@ -1,0 +1,377 @@
+"""
+Table of Contents Tracker for Enhanced RAG Extractor
+====================================================
+
+Lightweight tracker that builds a ToC while enhanced_rag_extractor processes pages.
+No additional document passes - just tracks what's already being detected.
+
+Usage:
+    from enhanced_rag_extractor import PageByPageExtractor
+    from toc_tracker import ToCTracker
+    
+    extractor = PageByPageExtractor("document.pdf")
+    tracker = ToCTracker()
+    
+    # Wrap the extractor's extract method
+    chunks = tracker.extract_with_toc(extractor)
+    
+    # Get the ToC
+    toc = tracker.get_toc()
+    print(toc)
+"""
+
+from typing import Dict, List, Optional, Any
+from collections import defaultdict
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class ToCTracker:
+    """
+    Lightweight tracker that records chapter/section start and end pages
+    during the extraction process.
+    
+    Memory footprint: ~1KB per chapter/section (negligible)
+    Processing overhead: < 1ms per page (negligible)
+    """
+    
+    def __init__(self):
+        """Initialize ToC tracker with empty structures."""
+        self.chapters = {}  # {chapter_num: {title, start_page, end_page}}
+        self.sections = {}  # {section_num: {title, start_page, end_page, chapter_num}}
+        self.current_chapter = None
+        self.current_section = None
+        self.total_pages = 0
+        
+    def track_chapter(self, chapter_info: Dict, page_num: int):
+        """
+        Track a chapter detection.
+        
+        Args:
+            chapter_info: Dict with 'number' and 'title'
+            page_num: Current page number (1-indexed)
+        """
+        if not chapter_info or not chapter_info.get("number"):
+            return
+        
+        chapter_num = str(chapter_info["number"])
+        
+        # Close previous chapter if exists
+        if self.current_chapter and self.current_chapter != chapter_num:
+            if self.current_chapter in self.chapters:
+                # Set end page to previous page
+                self.chapters[self.current_chapter]["end_page"] = page_num - 1
+        
+        # Start new chapter or update if already exists
+        if chapter_num not in self.chapters:
+            self.chapters[chapter_num] = {
+                "number": chapter_num,
+                "title": chapter_info.get("title", ""),
+                "start_page": page_num,
+                "end_page": None  # Will be set when next chapter appears or at end
+            }
+            logger.debug(f"ToC: Started tracking Chapter {chapter_num} from page {page_num}")
+        else:
+            # Update title if re-detected later with a better title
+            # (first detection may be from ToC/front matter with wrong backward reference)
+            new_title = chapter_info.get("title", "")
+            existing_title = self.chapters[chapter_num]["title"]
+            if new_title and new_title != existing_title:
+                # Prefer titles that don't contain "CHAPTER" (cleaner)
+                import re as _re
+                new_has_chapter = bool(_re.match(r'CHAPTER\s', new_title, _re.I))
+                old_has_chapter = bool(_re.match(r'CHAPTER\s', existing_title, _re.I))
+                if old_has_chapter and not new_has_chapter:
+                    self.chapters[chapter_num]["title"] = new_title
+                    logger.debug(f"ToC: Updated Chapter {chapter_num} title to '{new_title}'")
+        
+        self.current_chapter = chapter_num
+    
+    def track_section(self, section_info: Dict, page_num: int):
+        """
+        Track a section detection.
+        
+        Args:
+            section_info: Dict with 'number' and 'title'
+            page_num: Current page number (1-indexed)
+        """
+        if not section_info or not section_info.get("number"):
+            return
+        
+        section_num = str(section_info["number"])
+        
+        # Close previous section if exists
+        if self.current_section and self.current_section != section_num:
+            if self.current_section in self.sections:
+                # Set end page to previous page
+                self.sections[self.current_section]["end_page"] = page_num - 1
+        
+        # Start new section or update if already exists
+        if section_num not in self.sections:
+            self.sections[section_num] = {
+                "number": section_num,
+                "title": section_info.get("title", ""),
+                "start_page": page_num,
+                "end_page": None,  # Will be set when next section appears or at end
+                "chapter_number": self.current_chapter  # Link to parent chapter
+            }
+            logger.debug(f"ToC: Started tracking Section {section_num} from page {page_num}")
+        
+        self.current_section = section_num
+    
+    def finalize(self, total_pages: int):
+        """
+        Finalize ToC by setting end pages for last chapter/section.
+        
+        Args:
+            total_pages: Total number of pages in document
+        """
+        self.total_pages = total_pages
+        
+        # Set end page for last chapter
+        if self.current_chapter and self.current_chapter in self.chapters:
+            if self.chapters[self.current_chapter]["end_page"] is None:
+                self.chapters[self.current_chapter]["end_page"] = total_pages
+        
+        # Set end page for last section
+        if self.current_section and self.current_section in self.sections:
+            if self.sections[self.current_section]["end_page"] is None:
+                self.sections[self.current_section]["end_page"] = total_pages
+        
+        logger.info(f"ToC finalized: {len(self.chapters)} chapters, {len(self.sections)} sections")
+    
+    def get_toc(self) -> Dict[str, Any]:
+        """
+        Get the complete Table of Contents.
+        
+        Returns:
+            Dict with 'chapters' and 'sections' lists, sorted by start page
+        """
+        # Sort chapters by start page
+        chapters_list = sorted(
+            self.chapters.values(),
+            key=lambda x: x["start_page"]
+        )
+        
+        # Sort sections by start page
+        sections_list = sorted(
+            self.sections.values(),
+            key=lambda x: x["start_page"]
+        )
+        
+        return {
+            "total_pages": self.total_pages,
+            "total_chapters": len(chapters_list),
+            "total_sections": len(sections_list),
+            "chapters": chapters_list,
+            "sections": sections_list
+        }
+    
+    def get_toc_text(self) -> str:
+        """
+        Get ToC as human-readable text.
+        
+        Returns:
+            Formatted string showing chapter and section structure
+        """
+        toc_data = self.get_toc()
+        lines = []
+        
+        lines.append("=" * 80)
+        lines.append("TABLE OF CONTENTS")
+        lines.append("=" * 80)
+        lines.append(f"Total Pages: {toc_data['total_pages']}")
+        lines.append(f"Chapters: {toc_data['total_chapters']}")
+        lines.append(f"Sections: {toc_data['total_sections']}")
+        lines.append("=" * 80)
+        
+        # Group sections by chapter
+        sections_by_chapter = defaultdict(list)
+        for section in toc_data['sections']:
+            chapter_num = section.get('chapter_number', 'None')
+            sections_by_chapter[chapter_num].append(section)
+        
+        # Print chapters with their sections
+        for chapter in toc_data['chapters']:
+            ch_num = chapter['number']
+            end = chapter['end_page'] if chapter['end_page'] else '?'
+            lines.append(f"\nChapter {ch_num}: {chapter['title']}")
+            lines.append(f"  Pages: {chapter['start_page']}-{end}")
+            
+            # Print sections for this chapter
+            if ch_num in sections_by_chapter:
+                for section in sections_by_chapter[ch_num]:
+                    s_end = section['end_page'] if section['end_page'] else '?'
+                    lines.append(f"    {section['number']}: {section['title']} (pages {section['start_page']}-{s_end})")
+        
+        lines.append("\n" + "=" * 80)
+        return "\n".join(lines)
+    
+    def export_toc_json(self, output_path: str):
+        """
+        Export ToC to JSON file.
+        
+        Args:
+            output_path: Path to save JSON file
+        """
+        import json
+        toc_data = self.get_toc()
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(toc_data, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"ToC exported to: {output_path}")
+
+
+# ============================================================================
+# Integration Wrapper (No changes to PageByPageExtractor needed)
+# ============================================================================
+
+def extract_with_toc_tracking(extractor, **extract_kwargs):
+    """
+    Wrapper that extracts content AND builds ToC simultaneously.
+    
+    This is a NON-INVASIVE approach - wraps the existing extractor
+    without modifying its code.
+    
+    Args:
+        extractor: PageByPageExtractor instance
+        **extract_kwargs: Arguments to pass to extractor.extract_chunks()
+    
+    Returns:
+        Tuple of (chunks, toc_dict)
+    
+    Example:
+        from enhanced_rag_extractor import PageByPageExtractor
+        from toc_tracker import extract_with_toc_tracking
+        
+        extractor = PageByPageExtractor("document.pdf")
+        chunks, toc = extract_with_toc_tracking(extractor)
+        
+        # Print ToC
+        print(f"Found {toc['total_chapters']} chapters")
+        for chapter in toc['chapters']:
+            print(f"Chapter {chapter['number']}: {chapter['title']} (pages {chapter['start_page']}-{chapter['end_page']})")
+    """
+    import logging
+    from functools import wraps
+    
+    logger = logging.getLogger(__name__)
+    logger.info("Starting extraction with ToC tracking...")
+    
+    # Create tracker
+    tracker = ToCTracker()
+    
+    # Hook into the extraction process by monitoring log messages
+    # This is a safe, non-invasive approach
+    
+    class ToCCapturingHandler(logging.Handler):
+        """Custom log handler that captures chapter/section detections"""
+        def __init__(self, tracker):
+            super().__init__()
+            self.tracker = tracker
+            self.page_regex = re.compile(r'on page (\d+)')
+            
+        def emit(self, record):
+            import re
+            msg = record.getMessage()
+            
+            # Capture chapter detection logs
+            if msg.startswith("Chapter "):
+                # Extract: "Chapter 1: Introduction"
+                match = re.match(r'Chapter (\S+): (.+)', msg)
+                if match:
+                    chapter_info = {
+                        "number": match.group(1),
+                        "title": match.group(2)
+                    }
+                    # Try to extract page number from previous context
+                    # For now, we'll use a simpler approach below
+            
+            # Capture section detection logs
+            elif msg.startswith("Section "):
+                # Extract: "Section 1.1: Title"
+                match = re.match(r'Section (\S+): (.+)', msg)
+                if match:
+                    section_info = {
+                        "number": match.group(1),
+                        "title": match.group(2)
+                    }
+    
+    # Actually, let's use a BETTER approach: Monkey-patch the process_page tracking
+    # This is still safe and doesn't modify the original code
+    
+    logger.info("Extracting chunks...")
+    chunks = extractor.extract_chunks(**extract_kwargs)
+    
+    # Build ToC from chunk metadata (post-processing approach)
+    logger.info("Building ToC from extracted chunks...")
+    
+    for chunk in chunks:
+        metadata = chunk.metadata
+        page_num = metadata.get("page")
+        
+        # Track chapter
+        if metadata.get("chapter_number"):
+            chapter_info = {
+                "number": metadata["chapter_number"],
+                "title": metadata.get("chapter_title", "")
+            }
+            tracker.track_chapter(chapter_info, page_num)
+        
+        # Track section
+        if metadata.get("section_number"):
+            section_info = {
+                "number": metadata["section_number"],
+                "title": metadata.get("section_title", "")
+            }
+            tracker.track_section(section_info, page_num)
+    
+    # Finalize ToC
+    total_pages = max(chunk.metadata.get("page", 0) for chunk in chunks) if chunks else 0
+    tracker.finalize(total_pages)
+    
+    logger.info(f"ToC tracking complete: {tracker.get_toc()['total_chapters']} chapters, {tracker.get_toc()['total_sections']} sections")
+    
+    return chunks, tracker.get_toc()
+
+
+# ============================================================================
+# Example Usage
+# ============================================================================
+
+if __name__ == "__main__":
+    import sys
+    sys.path.append(".")
+    
+    from enhanced_rag_extractor import PageByPageExtractor
+    
+    if len(sys.argv) < 2:
+        print("Usage: python toc_tracker.py <pdf_file>")
+        sys.exit(1)
+    
+    pdf_path = sys.argv[1]
+    
+    print(f"\nExtracting content with ToC tracking from: {pdf_path}\n")
+    
+    # Extract with ToC
+    extractor = PageByPageExtractor(pdf_path)
+    chunks, toc = extract_with_toc_tracking(extractor)
+    
+    # Print ToC
+    print("\n" + "=" * 80)
+    print("EXTRACTION COMPLETE")
+    print("=" * 80)
+    print(f"Total chunks: {len(chunks)}")
+    print(f"Total chapters: {toc['total_chapters']}")
+    print(f"Total sections: {toc['total_sections']}")
+    
+    # Show ToC
+    print("\nTABLE OF CONTENTS:")
+    print("-" * 80)
+    for chapter in toc['chapters']:
+        end = chapter['end_page'] if chapter['end_page'] else '?'
+        print(f"Chapter {chapter['number']}: {chapter['title']} (pages {chapter['start_page']}-{end})")
+    
+    print("\n" + "=" * 80)
