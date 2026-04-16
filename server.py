@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from agents.tutor_agent import TutorAgent
+from agents.supervisor import Supervisor
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
@@ -33,20 +33,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Global tutor instance (one per server process) ────────────────────────────
+# ── Global supervisor instance (one per server process) ───────────────────────
 
-_tutor: Optional[TutorAgent] = None
+_supervisor: Optional[Supervisor] = None
 
 
-def _get_tutor() -> TutorAgent:
-    global _tutor
-    if _tutor is None:
-        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise HTTPException(500, "No API key configured. Set OPENAI_API_KEY in .env")
-        model = os.getenv("TUTOR_MODEL", "gpt-4o-mini")
-        _tutor = TutorAgent(api_key=api_key, model=model)
-    return _tutor
+def _get_supervisor() -> Supervisor:
+    global _supervisor
+    if _supervisor is None:
+        from utils.llm_client import LLMClient
+        from utils.gemini_client import GeminiLLMClient
+
+        session_dir = tempfile.mkdtemp(prefix="tutor_session_")
+        _supervisor = Supervisor(
+            llm_client=LLMClient(),
+            gemini_client=GeminiLLMClient(),
+            session_dir=session_dir,
+        )
+    return _supervisor
 
 
 # ── Request / Response models ─────────────────────────────────────────────────
@@ -74,22 +78,24 @@ def health():
 
 @app.post("/upload", response_model=UploadResponse)
 async def upload(files: list[UploadFile] = File(...)):
-    """Upload study materials. Returns the agent's welcome message."""
-    global _tutor
-    _tutor = None  # fresh tutor on each upload
+    """Upload study materials. Runs extract → plan → teach pipeline."""
+    global _supervisor
+    _supervisor = None  # fresh supervisor on each upload
 
-    tutor = _get_tutor()
+    supervisor = _get_supervisor()
     saved_paths = []
 
     try:
         for f in files:
             suffix = Path(f.filename).suffix
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+            tmp = tempfile.NamedTemporaryFile(
+                delete=False, suffix=suffix, dir=supervisor.session_dir
+            )
             tmp.write(await f.read())
             tmp.close()
             saved_paths.append(tmp.name)
 
-        welcome = tutor.load_files(saved_paths)
+        welcome = supervisor.upload(saved_paths)
         return UploadResponse(text=welcome)
 
     except Exception as e:
@@ -99,11 +105,11 @@ async def upload(files: list[UploadFile] = File(...)):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
-    """Send a student message. Returns text response + optional SVG diagram."""
+    """Send a student message. Routes through supervisor to active tutor."""
     try:
-        tutor = _get_tutor()
-        text, diagram = tutor.chat(req.message)
-        return ChatResponse(text=text or "", diagram=diagram)
+        supervisor = _get_supervisor()
+        text = supervisor.chat(req.message)
+        return ChatResponse(text=text or "", diagram=None)
     except Exception as e:
         logging.error(f"Chat error: {e}", exc_info=True)
         raise HTTPException(500, str(e))
@@ -111,9 +117,9 @@ async def chat(req: ChatRequest):
 
 @app.post("/reset")
 def reset():
-    """Reset the tutor session."""
-    global _tutor
-    _tutor = None
+    """Reset the supervisor session."""
+    global _supervisor
+    _supervisor = None
     return {"status": "reset"}
 
 

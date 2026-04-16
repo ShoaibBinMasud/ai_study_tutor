@@ -8,15 +8,21 @@ All agents support: OpenAI (gpt-4, gpt-4o, gpt-4o-mini), Gemini (gemini-2.0-flas
 # ─── Model Configuration ────────────────────────────────────────────────────
 
 MODELS = {
-    # Main orchestrator — handles tool calling, session routing, section loading
+    # Top-level orchestrator — routes to document/planner/teaching agents
+    "supervisor": {
+        "model": "gpt-4o",  # Strong model for orchestration decisions
+        "api_provider": "openai",
+    },
+
+    # Legacy orchestrator (kept for backwards compatibility)
     "tutor_agent": {
-        "model": "gpt-4o",  # Change to "gpt-4o-mini" for cost, "claude-opus-4-6" for Claude API
-        "api_provider": "openai",  # "openai" or "anthropic"
+        "model": "gpt-4o",
+        "api_provider": "openai",
     },
 
     # Student-facing tutor — teaches one concept/unit at a time
     "teaching_agent": {
-        "model": "gpt-4.1-mini",  # Switch to gpt-4o for higher quality vs gpt-4o-mini
+        "model": "gpt-4o",  # Switch to gpt-4o for higher quality vs gpt-4o-mini
         "api_provider": "openai",
     },
 

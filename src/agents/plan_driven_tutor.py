@@ -223,8 +223,8 @@ class PlanDrivenTutor:
     def _extract_raw_problems(self, unit: dict) -> str:
         """
         Return the full verbatim text of every example and practice problem
-        in a unit. This is what the teaching agent uses when giving problems —
-        exact text from the book, not a summary.
+        in a unit (WITHOUT answers). This is what the teaching agent uses when
+        giving problems to the student — exact text from the book, no solutions.
         """
         lines = []
         examples = unit.get("examples", [])
@@ -232,8 +232,7 @@ class PlanDrivenTutor:
             lines.append(f"[Example {ex.get('ref', '')}]")
             if ex.get("problem"):
                 lines.append(f"Problem: {ex['problem']}")
-            if ex.get("answer"):
-                lines.append(f"Answer: {ex['answer']}")
+            # NOTE: Answers not included here to prevent premature disclosure
             lines.append("")
 
         practice = unit.get("practice_problems", [])
@@ -241,8 +240,7 @@ class PlanDrivenTutor:
             lines.append(f"[Practice {pp.get('ref', '')}]")
             if pp.get("problem"):
                 lines.append(f"Problem: {pp['problem']}")
-            if pp.get("answer"):
-                lines.append(f"Answer: {pp['answer']}")
+            # NOTE: Answers not included here to prevent premature disclosure
             lines.append("")
 
         return "\n".join(lines) if lines else "No problems in reference card for this unit."
@@ -297,23 +295,73 @@ class PlanDrivenTutor:
 
         examples = unit.get("examples", [])
         if examples:
-            lines = ["WORKED EXAMPLES (use after student understands the equations):"]
+            lines = ["WORKED EXAMPLES (show problem + hint, then wait for student attempt):"]
             for ex in examples:
                 lines.append(f"  - {ex.get('ref', '')}")
                 if ex.get("problem"):
                     lines.append(f"    Problem: {ex['problem']}")
-                if ex.get("answer"):
-                    lines.append(f"    Answer: {ex['answer']}")
+                # NOTE: Answers are NOT shown here. See PROBLEM ANSWERS section below.
             sections.append("\n".join(lines))
 
         practice = unit.get("practice_problems", [])
         if practice:
-            lines = ["PRACTICE PROBLEMS:"]
+            lines = ["PRACTICE PROBLEMS (show these, but only provide answers after student attempts):"]
             for pp in practice:
                 entry = f"  - {pp.get('ref', '')}"
                 if pp.get("problem"):
                     entry += f": {pp['problem']}"
                 lines.append(entry)
+            sections.append("\n".join(lines))
+
+        takeaways = unit.get("key_takeaways", [])
+        if takeaways:
+            lines = ["KEY TAKEAWAYS (what the student must know after this unit):"]
+            for t in takeaways:
+                lines.append(f"  • {t}")
+            sections.append("\n".join(lines))
+
+        no_go = unit.get("no_go_zones", [])
+        if no_go:
+            lines = ["NO_GO_ZONES (do NOT introduce these — they belong to later units):"]
+            for z in no_go:
+                lines.append(f"  ✗ {z}")
+            sections.append("\n".join(lines))
+
+        # PROBLEM ANSWERS — for reference only after student attempts
+        examples = unit.get("examples", [])
+        practice = unit.get("practice_problems", [])
+        has_answers = any(ex.get("answer") for ex in examples) or any(pp.get("answer") for pp in practice)
+
+        if has_answers:
+            lines = [
+                "━━━ PROBLEM ANSWERS (REFERENCE ONLY) ━━━",
+                "",
+                "⚠️  DO NOT SHOW THESE UNLESS:",
+                "  - Student has attempted the problem and is stuck after 2+ tries, OR",
+                "  - Student explicitly asks for the full solution/walkthrough",
+                "",
+                "Show answers only to help, not to shortcut learning.",
+                ""
+            ]
+
+            examples = unit.get("examples", [])
+            if examples and any(ex.get("answer") for ex in examples):
+                lines.append("WORKED EXAMPLE ANSWERS:")
+                for ex in examples:
+                    if ex.get("answer"):
+                        lines.append(f"  [{ex.get('ref', '')}]")
+                        lines.append(f"  {ex['answer']}")
+                        lines.append("")
+
+            practice = unit.get("practice_problems", [])
+            if practice and any(pp.get("answer") for pp in practice):
+                lines.append("PRACTICE PROBLEM ANSWERS:")
+                for pp in practice:
+                    if pp.get("answer"):
+                        lines.append(f"  [{pp.get('ref', '')}]")
+                        lines.append(f"  {pp['answer']}")
+                        lines.append("")
+
             sections.append("\n".join(lines))
 
         content = unit.get("content", "").strip()

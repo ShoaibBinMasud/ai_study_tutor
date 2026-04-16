@@ -107,6 +107,35 @@ For each worked example:
 - List the sub-headings or distinct sub-concepts within this unit.
 - These are what the teaching agent will cover within the lesson.
 
+### unit_type
+Classify this unit as one of:
+- conceptual: prose-heavy, no or minimal equations, builds intuition (e.g. States of Matter, cell biology)
+- equation-heavy: core content IS the equations and their derivation (e.g. Wien's Law, Newton's laws)
+- proof-based: theorems and formal logical arguments (e.g. number theory, topology)
+- example-driven: concept is best understood through worked problems (e.g. stoichiometry, integration techniques)
+- reaction-based: mechanism-driven chemistry (e.g. nucleophilic substitution)
+- code-focused: algorithms and implementation (e.g. sorting, dynamic programming)
+
+### difficulty
+Classify this unit as one of:
+- introductory: foundational definitions, no prior topic knowledge needed
+- intermediate: builds on prior units, requires understanding of dependencies
+- advanced: graduate-level or requires significant prior knowledge
+
+### key_takeaways
+Extract 3-6 bullet points that are the CORE facts a student MUST know after this unit.
+Copy them verbatim or near-verbatim from the source text.
+These are what distinguish a student who understood the unit from one who didn't.
+
+### no_go_zones
+List concepts that are NOT introduced in this unit, even if the student might expect them.
+Purpose: prevent the teaching agent from introducing topics that belong to later units.
+Examples:
+- "Ideal Gas Law (PV=nRT) — quantitative gas behavior is NOT covered here"
+- "Quantum mechanical model of the atom — not yet, only classical picture here"
+- "Reaction rate equations — covered in kinetics, not this unit"
+If there are no obvious no_go_zones, return an empty list [].
+
 ---
 
 ## OUTPUT FORMAT
@@ -149,6 +178,17 @@ Output ONLY a valid JSON object — no markdown fences, no explanation:
           "ref": "<e.g. Problem 3-13 (page 143)>",
           "problem": "<problem statement verbatim if available in content, else omit this field>"
         }
+      ],
+      "unit_type": "<one of: conceptual | equation-heavy | proof-based | example-driven | reaction-based | code-focused>",
+      "difficulty": "<one of: introductory | intermediate | advanced>",
+      "key_takeaways": [
+        "<core fact 1 — extracted verbatim or near-verbatim from source>",
+        "<core fact 2>",
+        ...
+      ],
+      "no_go_zones": [
+        "<concept NOT covered, e.g. 'Ideal Gas Law (PV=nRT) — belongs to a later unit'>",
+        ...
       ],
       "content": "<300-600 words of verbatim/near-verbatim key technical content from the source — definitions, equation derivation context, experimental results, key constants. NO teaching narrative.>"
     }
